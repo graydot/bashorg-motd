@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# wut - Show next bash.org quote
+# This is a convenience command that calls the motd.sh script
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MOTD_SCRIPT="$SCRIPT_DIR/motd.sh"
+
+if [ -f "$MOTD_SCRIPT" ]; then
+    "$MOTD_SCRIPT" wut
+else
+    echo "Error: motd.sh not found in $SCRIPT_DIR"
+    exit 1
+fi
