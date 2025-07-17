@@ -4,10 +4,9 @@
 # Downloads and displays random quotes from GitLab repository
 
 QUOTES_DIR="$HOME/.cache/bashorg-quotes"
-QUOTES_LIST_FILE="$QUOTES_DIR/quotes_list.txt"
+QUOTES_TSV_FILE="$QUOTES_DIR/compiled.tsv"
 LAST_USED_FILE="$QUOTES_DIR/last_used.txt"
-GITLAB_API_URL="https://gitlab.com/api/v4/projects/dwrodri%2Fbash_irc_quotes/repository/tree?path=cleaned&ref=master&per_page=200"
-GITLAB_RAW_URL="https://gitlab.com/dwrodri/bash_irc_quotes/-/raw/master/cleaned"
+GITLAB_TSV_URL="https://gitlab.com/dwrodri/bash_irc_quotes/-/raw/master/compiled.tsv"
 
 # Colors for output
 RED='\033[0;31m'
@@ -39,56 +38,28 @@ draw_progress_bar() {
     printf "] %d%% (%d/%d)${NC}" "$percentage" "$current" "$total"
 }
 
-# Function to download quote file list
-download_quotes_list() {
-    echo "Downloading quotes list..."
+# Function to download TSV file
+download_quotes_tsv() {
+    echo "Downloading quotes TSV file..."
     
-    # Clear existing list
-    > "$QUOTES_LIST_FILE"
+    curl -s "$GITLAB_TSV_URL" > "$QUOTES_TSV_FILE"
     
-    # Get total pages from first request
-    local first_page_response=$(curl -s -I "$GITLAB_API_URL")
-    local total_pages=$(echo "$first_page_response" | grep -i "x-total-pages" | sed 's/.*: //' | tr -d '\r')
-    
-    if [ -z "$total_pages" ]; then
-        echo "Could not determine total pages, trying single page..."
-        total_pages=1
+    if [ ! -s "$QUOTES_TSV_FILE" ]; then
+        echo "Failed to download quotes TSV file."
+        return 1
     fi
     
-    echo "Found $total_pages pages of quotes..."
-    
-    # Download all pages with progress bar
-    for page in $(seq 1 "$total_pages"); do
-        draw_progress_bar "$page" "$total_pages"
-        curl -s "${GITLAB_API_URL}&page=${page}" | grep -o '"name":"[^"]*\.txt"' | sed 's/"name":"//g' | sed 's/"//g' >> "$QUOTES_LIST_FILE"
-        
-        # Shuffle after each page to ensure randomness even if interrupted
-        if [ -s "$QUOTES_LIST_FILE" ]; then
-            shuf "$QUOTES_LIST_FILE" -o "$QUOTES_LIST_FILE"
-        fi
-    done
-    
-    # Clear progress bar and show completion
-    printf "\r%*s\r" 80 ""
-    local total_quotes=$(wc -l < "$QUOTES_LIST_FILE")
+    local total_quotes=$(wc -l < "$QUOTES_TSV_FILE")
     echo -e "${GREEN}✓ Downloaded $total_quotes quotes!${NC}"
-    
-    if [ ! -s "$QUOTES_LIST_FILE" ]; then
-        echo "Failed to download quotes list. Using fallback method..."
-        # Fallback: generate common quote numbers
-        for i in {1..10000}; do
-            echo "${i}.txt" >> "$QUOTES_LIST_FILE"
-        done
-    fi
 }
 
 # Function to get total number of quotes
 get_total_quotes() {
-    wc -l < "$QUOTES_LIST_FILE"
+    wc -l < "$QUOTES_TSV_FILE"
 }
 
 # Function to get next quote using weighted distribution
-get_next_quote_file() {
+get_next_quote_line() {
     local total_quotes=$(get_total_quotes)
     
     # Initialize or read last used index
@@ -99,47 +70,47 @@ get_next_quote_file() {
     local last_used=$(cat "$LAST_USED_FILE")
     local next_index=$(( (last_used + 1) % total_quotes ))
     
-    # If we've cycled through all quotes, shuffle the list
+    # If we've cycled through all quotes, shuffle the file
     if [ "$next_index" -eq 0 ] && [ "$last_used" -gt 0 ]; then
         echo "Shuffling quotes for better distribution..."
-        shuf "$QUOTES_LIST_FILE" -o "$QUOTES_LIST_FILE"
+        shuf "$QUOTES_TSV_FILE" -o "$QUOTES_TSV_FILE"
     fi
     
     echo "$next_index" > "$LAST_USED_FILE"
     
-    # Get the quote file name
-    sed -n "$((next_index + 1))p" "$QUOTES_LIST_FILE"
+    # Get the quote line
+    sed -n "$((next_index + 1))p" "$QUOTES_TSV_FILE"
 }
 
-# Function to download and display a quote
+# Function to display a quote from TSV line
 display_quote() {
-    local quote_file="$1"
-    local quote_path="$QUOTES_DIR/$quote_file"
+    local quote_line="$1"
     
-    # Download quote if not cached or older than 1 day
-    if [ ! -f "$quote_path" ] || [ "$(find "$quote_path" -mtime +1 2>/dev/null)" ]; then
-        curl -s "$GITLAB_RAW_URL/$quote_file" > "$quote_path"
-        
-        # Check if download was successful
-        if [ ! -s "$quote_path" ]; then
-            echo "Failed to download quote: $quote_file"
-            return 1
-        fi
-    fi
+    # Parse TSV line: ID, Score, Quote
+    local quote_id=$(echo "$quote_line" | cut -f1)
+    local quote_score=$(echo "$quote_line" | cut -f2)
+    local quote_content=$(echo "$quote_line" | cut -f3 | sed 's/\\n/\n/g')
     
-    # Parse and display the quote
-    local quote_header=$(head -n 1 "$quote_path")
-    local quote_content=$(tail -n +2 "$quote_path")
+    # Create header with ID and score
+    local quote_header="Quote #$quote_id (Score: $quote_score)"
     
     echo -e "${CYAN}╭─────────────────────────────────────────────────────────────────────────────────╮${NC}"
-    echo -e "${CYAN}│${YELLOW}  Quote of the Day - bash.org IRC Quotes${CYAN}                                    │${NC}"
+    echo -e "${CYAN}│${YELLOW}  Quote of the Day - bash.org IRC Quotes${CYAN}                                         │${NC}"
     echo -e "${CYAN}├─────────────────────────────────────────────────────────────────────────────────┤${NC}"
-    echo -e "${CYAN}│${BLUE}  $quote_header${CYAN}$(printf "%*s" $((75 - ${#quote_header})) "")│${NC}"
+    echo -e "${CYAN}│${BLUE}  $quote_header${CYAN}$(printf "%*s" $((76 - ${#quote_header})) "")   │${NC}"
     echo -e "${CYAN}├─────────────────────────────────────────────────────────────────────────────────┤${NC}"
     
-    # Word wrap the quote content
-    echo "$quote_content" | fold -s -w 75 | while IFS= read -r line; do
-        echo -e "${CYAN}│${GREEN}  $line${CYAN}$(printf "%*s" $((75 - ${#line})) "")│${NC}"
+    # Word wrap the quote content (handle existing newlines and long lines)
+    echo "$quote_content" | while IFS= read -r line; do
+        if [ -z "$line" ]; then
+            echo -e "${CYAN}│${GREEN}$(printf "%*s" 79 "")│${NC}"
+        else
+            echo "$line" | fold -s -w 74 | while IFS= read -r wrapped_line; do
+                local display_width=${#wrapped_line}
+                local padding=$((79 - display_width))
+                echo -e "${CYAN}│${GREEN}  $wrapped_line${CYAN}$(printf "%*s" $padding "")│${NC}"
+            done
+        fi
     done
     
     echo -e "${CYAN}╰─────────────────────────────────────────────────────────────────────────────────╯${NC}"
@@ -152,8 +123,8 @@ display_quote() {
 # Function to update quotes cache
 update_quotes() {
     echo "Updating quotes cache..."
-    rm -f "$QUOTES_LIST_FILE"
-    download_quotes_list
+    rm -f "$QUOTES_TSV_FILE"
+    download_quotes_tsv
     echo "Quotes cache updated!"
 }
 
@@ -174,16 +145,16 @@ main() {
             # Start timing
             local start_time=$(python3 -c "import time; print(int(time.time() * 1000))" 2>/dev/null || echo $(($(date +%s) * 1000)))
             
-            # Check if quotes list exists
-            if [ ! -f "$QUOTES_LIST_FILE" ]; then
+            # Check if quotes TSV exists
+            if [ ! -f "$QUOTES_TSV_FILE" ]; then
                 echo "First run detected. Downloading quotes..."
-                download_quotes_list
+                download_quotes_tsv
             fi
             
             # Get and display a quote
-            quote_file=$(get_next_quote_file)
-            if [ -n "$quote_file" ]; then
-                display_quote "$quote_file"
+            quote_line=$(get_next_quote_line)
+            if [ -n "$quote_line" ]; then
+                display_quote "$quote_line"
                 
                 # Calculate and display timing
                 local end_time=$(python3 -c "import time; print(int(time.time() * 1000))" 2>/dev/null || echo $(($(date +%s) * 1000)))
